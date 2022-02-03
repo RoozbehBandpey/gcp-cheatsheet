@@ -121,3 +121,63 @@ This NGINX default web page should open:
 
 
 ## Create a new instance with gcloud
+
+Instead of using the Cloud Console to create a virtual machine instance, you can use the command line tool gcloud, which is pre-installed in Google Cloud Shell. Cloud Shell is a Debian-based virtual machine loaded with all the development tools you'll need (gcloud, git, and others) and offers a persistent 5-GB home directory.
+
+In the Cloud Shell, use gcloud to create a new virtual machine instance from the command line:
+
+```bash
+gcloud compute instances create gcelab2 --machine-type n1-standard-2 --zone europe-west3-a
+
+# Output
+Created [...gcelab2].
+NAME     ZONE           MACHINE_TYPE  ...    STATUS
+gcelab2  us-central1-f  n1-standard-2 ...    RUNNING
+```
+
+The new instance has these default values:
+
+* The latest Debian 10 (buster) image.
+* The `n1-standard-2` machine type. In this lab, you can select one of these other machine types: `n1-highmem-4` or `n1-highcpu-4`. When you're working on a project outside Qwiklabs, you can also specify a custom machine type.
+* A root persistent disk with the same name as the instance; the disk is automatically attached to the instance.
+To see all the defaults, run:
+
+```bash
+gcloud compute instances create --help
+
+To exit help, press CTRL + C
+```
+
+> Note: You can set the default region and zones that gcloud uses if you are always working within one region/zone and you don't want to append the --zone flag every time. To do this, run these commands:
+`gcloud config set compute/zone ...` and `gcloud config set compute/region ...`
+
+In the Cloud Console, on the Navigation menu, click Compute Engine > VM instances. Your 2 new instances should be listed.
+
+You can also use SSH to connect to your instance via `gcloud`. Make sure to add your zone, or omit the `--zone` flag if you've set the option globally:
+
+```bash
+gcloud compute ssh gcelab2 --zone us-central1-f
+
+# Output
+WARNING: The public SSH key file for gcloud does not exist.
+WARNING: The private SSH key file for gcloud does not exist.
+WARNING: You do not have an SSH key for gcloud.
+WARNING: [/usr/bin/ssh-keygen] will be executed to generate a key.
+This tool needs to create the directory
+[/home/gcpstaging306_student/.ssh] before being able to generate SSH
+Keys.
+```
+
+Type Y to continue.
+
+```bash
+Do you want to continue? (Y/n)
+
+Press ENTER through the passphrase section to leave the passphrase empty.
+
+Generating public/private rsa key pair.
+Enter passphrase (empty for no passphrase)
+After connecting, disconnect from SSH by exiting from the remote shell:
+
+exit
+```

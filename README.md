@@ -2,6 +2,10 @@
 GCP cli cheat sheet
 
 
+
+1. [Creating a Virtual Machine](01_essentials/01_vm/README.md)
+1. [Cloud Shell and gcloud](01_essentials/02_cloud_shell/README.md)
+
 ## Command-line interface
 
 ### macOS installation

@@ -173,7 +173,180 @@ Now return to the code editor tab and run the following command in Cloud Shell t
 gsutil -m rm gs://$GOOGLE_CLOUD_PROJECT-upload/*
 ```
 
+## Update the Docker container
+With all the files identified, the Dockerfile can now be created.
 
+The package for LibreOffice was not included in the container before, which means it now needs to be added. Let's add these as a RUN command within the Dockerfile.
 
+Open the `Dockerfile` manifest and add the command `RUN apt-get update -y && apt-get install -y libreoffice && apt-get clean` line as shown below:
 ```bash
+FROM node:12
+RUN apt-get update -y \
+    && apt-get install -y libreoffice \
+    && apt-get clean
+WORKDIR /usr/src/app
+COPY package.json package*.json ./
+RUN npm install --only=production
+COPY . .
+CMD [ "npm", "start" ]
 ```
+
+## Deploy the new version of the pdf-conversion service
+Open the `index.js` file and add the following package requirements at the top of the file:
+```bash
+const {promisify} = require('util');
+const {Storage}   = require('@google-cloud/storage');
+const exec        = promisify(require('child_process').exec);
+const storage     = new Storage();
+```
+Replace the `app.post('/', async (req, res)` with the following code:
+```js
+app.post('/', async (req, res) => {
+  try {
+    const file = decodeBase64Json(req.body.message.data);
+    await downloadFile(file.bucket, file.name);
+    const pdfFileName = await convertFile(file.name);
+    await uploadFile(process.env.PDF_BUCKET, pdfFileName);
+    await deleteFile(file.bucket, file.name);
+  }
+  catch (ex) {
+    console.log(`Error: ${ex}`);
+  }
+  res.set('Content-Type', 'text/plain');
+  res.send('\n\nOK\n\n');
+})
+```
+Now add the following code that processes LibreOffice documents to the bottom of the file:
+```js
+async function downloadFile(bucketName, fileName) {
+  const options = {destination: `/tmp/${fileName}`};
+  await storage.bucket(bucketName).file(fileName).download(options);
+}
+async function convertFile(fileName) {
+  const cmd = 'libreoffice --headless --convert-to pdf --outdir /tmp ' +
+              `"/tmp/${fileName}"`;
+  console.log(cmd);
+  const { stdout, stderr } = await exec(cmd);
+  if (stderr) {
+    throw stderr;
+  }
+  console.log(stdout);
+  pdfFileName = fileName.replace(/\.\w+$/, '.pdf');
+  return pdfFileName;
+}
+async function deleteFile(bucketName, fileName) {
+  await storage.bucket(bucketName).file(fileName).delete();
+}
+async function uploadFile(bucketName, fileName) {
+  await storage.bucket(bucketName).upload(`/tmp/${fileName}`);
+}
+```
+Ensure your `index.js` file looks like the following:
+> Note: To avoid any formatting errors, it's recommended you replace all of the code in your index.js file with this example code.
+```js
+const {promisify} = require('util');
+const {Storage}   = require('@google-cloud/storage');
+const exec        = promisify(require('child_process').exec);
+const storage     = new Storage();
+const express     = require('express');
+const bodyParser  = require('body-parser');
+const app         = express();
+app.use(bodyParser.json());
+const port = process.env.PORT || 8080;
+app.listen(port, () => {
+  console.log('Listening on port', port);
+});
+app.post('/', async (req, res) => {
+  try {
+    const file = decodeBase64Json(req.body.message.data);
+    await downloadFile(file.bucket, file.name);
+    const pdfFileName = await convertFile(file.name);
+    await uploadFile(process.env.PDF_BUCKET, pdfFileName);
+    await deleteFile(file.bucket, file.name);
+  }
+  catch (ex) {
+    console.log(`Error: ${ex}`);
+  }
+  res.set('Content-Type', 'text/plain');
+  res.send('\n\nOK\n\n');
+})
+function decodeBase64Json(data) {
+  return JSON.parse(Buffer.from(data, 'base64').toString());
+}
+async function downloadFile(bucketName, fileName) {
+  const options = {destination: `/tmp/${fileName}`};
+  await storage.bucket(bucketName).file(fileName).download(options);
+}
+async function convertFile(fileName) {
+  const cmd = 'libreoffice --headless --convert-to pdf --outdir /tmp ' +
+              `"/tmp/${fileName}"`;
+  console.log(cmd);
+  const { stdout, stderr } = await exec(cmd);
+  if (stderr) {
+    throw stderr;
+  }
+  console.log(stdout);
+  pdfFileName = fileName.replace(/\.\w+$/, '.pdf');
+  return pdfFileName;
+}
+async function deleteFile(bucketName, fileName) {
+  await storage.bucket(bucketName).file(fileName).delete();
+}
+async function uploadFile(bucketName, fileName) {
+  await storage.bucket(bucketName).upload(`/tmp/${fileName}`);
+}
+```
+The main logic is housed in these functions:
+```js
+    const file = decodeBase64Json(req.body.message.data);
+    await downloadFile(file.bucket, file.name);
+    const pdfFileName = await convertFile(file.name);
+    await uploadFile(process.env.PDF_BUCKET, pdfFileName);
+    await deleteFile(file.bucket, file.name);
+```
+Whenever a file has been uploaded, this service gets triggered. It performs these tasks, one per line above:
+
+* Extracts the file details from the Pub/Sub notification.
+* Downloads the file from Cloud Storage to the local hard drive. This is actually not a physical disk, but a section of virtual memory that behaves like a disk.
+* Converts the downloaded file to PDF.
+* Uploads the PDF file to Cloud Storage. The environment variable process.env.PDF_BUCKET contains the name of the Cloud Storage bucket to write PDFs to. You will assign a value to this variable when you deploy the service below.
+* Deletes the original file from Cloud Storage.
+
+The rest of index.js implements the functions called by this top-level code.
+
+It's time to deploy the service, and to set the PDF_BUCKET environment variable. It's also a good idea to give LibreOffice 2 GB of RAM to work with (see the line with the --memory option).
+
+Run the following command to build the container:
+```bash
+gcloud builds submit \
+  --tag gcr.io/$GOOGLE_CLOUD_PROJECT/pdf-converter
+```
+
+Now deploy the latest version of your application:
+```bash
+gcloud run deploy pdf-converter \
+  --image gcr.io/$GOOGLE_CLOUD_PROJECT/pdf-converter \
+  --platform managed \
+  --region us-central1 \
+  --memory=2Gi \
+  --no-allow-unauthenticated \
+  --max-instances=1 \
+  --set-env-vars PDF_BUCKET=$GOOGLE_CLOUD_PROJECT-processed
+```
+
+## Testing the pdf-conversion service
+With LibreOffice part of the container, this build will take longer than the previous one. This is a good time to get up and stretch for a few minutes.
+
+Once the deployment commands finish, make sure that the service was deployed correctly by running:
+```bash
+curl -X POST -H "Authorization: Bearer $(gcloud auth print-identity-token)" $SERVICE_URL
+```
+If you get the response "OK" you have successfully deployed the updated Cloud Run service. LibreOffice can convert many file types to PDF: DOCX, XLSX, JPG, PNG, GIF, etc.
+
+Run the following command to upload some example files:
+```bash
+gsutil -m cp gs://spls/gsp644/* gs://$GOOGLE_CLOUD_PROJECT-upload
+```
+Return to the Cloud Console, open the Navigation menu and select Cloud Storage. Open the -upload bucket and click on the Refresh button a couple of times to see how the files are deleted, one by one, as they are converted to PDFs.
+
+Then click Browser from the left menu, and click on the bucket whose name ends in "-processed". It should contain PDF versions of all files. Feel free to open the PDF files to make sure they were properly converted:
